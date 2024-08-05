@@ -258,12 +258,6 @@ impl TlsAcceptorConfig {
     }
 }
 
-#[cfg(feature = "__tls")]
-#[derive(Debug, Default)]
-pub struct TlsOptionalFlags {
-    explicit_protocols: bool
-}
-
 #[cfg(feature = "openssl")]
 mod openssl {
     use actix_service::ServiceFactoryExt as _;
@@ -702,7 +696,6 @@ mod rustls_0_23 {
             self,
             mut config: ServerConfig,
             tls_acceptor_config: TlsAcceptorConfig,
-            tls_optional_flags: Option<TlsOptionalFlags> 
         ) -> impl ServiceFactory<
             TcpStream,
             Config = (),
@@ -710,12 +703,7 @@ mod rustls_0_23 {
             Error = TlsError<io::Error, DispatchError>,
             InitError = (),
         > {
-            if tls_optional_flags.unwrap_or_default().explicit_protocols {
-                let mut protos = vec![];
-            } else {
-                let mut protos = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-            }
-
+            let mut protos = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
             protos.extend_from_slice(&config.alpn_protocols);
             config.alpn_protocols = protos;
 
