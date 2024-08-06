@@ -470,7 +470,7 @@ where
     ///
     /// See [`bind()`](Self::bind()) for more details on `addrs` argument.
     ///
-    /// ALPN protocols "h2" and "http/1.1" are added to any configured ones.
+    /// ALPN protocols are expected to be explicitly defined by the user. 
     #[cfg(feature = "rustls-0_23")]
     pub fn bind_rustls_0_23<A: net::ToSocketAddrs>(
         mut self,
@@ -480,6 +480,25 @@ where
         let sockets = bind_addrs(addrs, self.backlog)?;
         for lst in sockets {
             self = self.listen_rustls_0_23_inner(lst, config.clone())?;
+        }
+        Ok(self)
+    }
+
+    /// Resolves socket address(es) and binds server to created listener(s) for TLS connections
+    /// using Rustls v0.23.
+    ///
+    /// See [`bind()`](Self::bind()) for more details on `addrs` argument.
+    ///
+    /// ALPN protocols "h2" and "http/1.1" are added to any configured ones.
+    #[cfg(feature = "rustls-0_23")]
+    pub fn bind_rustls_0_23_explicit_protocol<A: net::ToSocketAddrs>(
+        mut self,
+        addrs: A,
+        config: actix_tls::accept::rustls_0_23::reexports::ServerConfig,
+    ) -> io::Result<Self> {
+        let sockets = bind_addrs(addrs, self.backlog)?;
+        for lst in sockets {
+            self = self.listen_rustls_0_23_inner_explicit_protocol(lst, config.clone())?;
         }
         Ok(self)
     }
@@ -854,6 +873,57 @@ where
                         AppConfig::new(true, host.clone(), addr)
                     }))
                     .rustls_0_23_with_config(config.clone(), acceptor_config)
+                })?;
+
+        Ok(self)
+    }
+
+    #[cfg(feature = "rustls-0_23")]
+    fn listen_rustls_0_23_inner_explicit_protocol(
+        mut self,
+        lst: net::TcpListener,
+        config: actix_tls::accept::rustls_0_23::reexports::ServerConfig,
+    ) -> io::Result<Self> {
+        let factory = self.factory.clone();
+        let cfg = Arc::clone(&self.config);
+        let addr = lst.local_addr().unwrap();
+        self.sockets.push(Socket {
+            addr,
+            scheme: "https",
+        });
+
+        let on_connect_fn = self.on_connect_fn.clone();
+
+        self.builder =
+            self.builder
+                .listen(format!("actix-web-service-{}", addr), lst, move || {
+                    let c = cfg.lock().unwrap();
+                    let host = c.host.clone().unwrap_or_else(|| format!("{}", addr));
+
+                    let svc = HttpService::build()
+                        .keep_alive(c.keep_alive)
+                        .client_request_timeout(c.client_request_timeout)
+                        .client_disconnect_timeout(c.client_disconnect_timeout);
+
+                    let svc = if let Some(handler) = on_connect_fn.clone() {
+                        svc.on_connect_ext(move |io: &_, ext: _| (handler)(io as &dyn Any, ext))
+                    } else {
+                        svc
+                    };
+
+                    let fac = factory()
+                        .into_factory()
+                        .map_err(|err| err.into().error_response());
+
+                    let acceptor_config = match c.tls_handshake_timeout {
+                        Some(dur) => TlsAcceptorConfig::default().handshake_timeout(dur),
+                        None => TlsAcceptorConfig::default(),
+                    };
+
+                    svc.finish(map_config(fac, move |_| {
+                        AppConfig::new(true, host.clone(), addr)
+                    }))
+                    .rustls_0_23_with_config_explicit_protos(config.clone(), acceptor_config)
                 })?;
 
         Ok(self)

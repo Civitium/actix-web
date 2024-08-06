@@ -733,6 +733,49 @@ mod rustls_0_23 {
                 })
                 .and_then(self.map_err(TlsError::Service))
         }
+
+        /// Create Rustls v0.23 based service with custom TLS acceptor configuration.
+        pub fn rustls_0_23_with_config_explicit_protos(
+            self,
+            mut config: ServerConfig,
+            tls_acceptor_config: TlsAcceptorConfig,
+        ) -> impl ServiceFactory<
+            TcpStream,
+            Config = (),
+            Response = (),
+            Error = TlsError<io::Error, DispatchError>,
+            InitError = (),
+        > {
+            let mut protos = vec![];
+            protos.extend_from_slice(&config.alpn_protocols);
+            config.alpn_protocols = protos;
+
+            let mut acceptor = Acceptor::new(config);
+
+            if let Some(handshake_timeout) = tls_acceptor_config.handshake_timeout {
+                acceptor.set_handshake_timeout(handshake_timeout);
+            }
+
+            acceptor
+                .map_init_err(|_| {
+                    unreachable!("TLS acceptor service factory does not error on init")
+                })
+                .map_err(TlsError::into_service_error)
+                .and_then(|io: TlsStream<TcpStream>| async {
+                    let proto = if let Some(protos) = io.get_ref().1.alpn_protocol() {
+                        if protos.windows(2).any(|window| window == b"h2") {
+                            Protocol::Http2
+                        } else {
+                            Protocol::Http1
+                        }
+                    } else {
+                        Protocol::Http1
+                    };
+                    let peer_addr = io.get_ref().0.peer_addr().ok();
+                    Ok((io, proto, peer_addr))
+                })
+                .and_then(self.map_err(TlsError::Service))
+        }
     }
 }
 
